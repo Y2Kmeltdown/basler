@@ -8,8 +8,9 @@ import threading
 import time
 import types
 import typing
+import queue
 
-import numpy
+import numpy as np
 import numpy.typing
 import PySide6.QtCore
 import PySide6.QtGui
@@ -18,6 +19,10 @@ import PySide6.QtQuick
 import pypylon.pylon as pylon
 
 import transform
+from transform import PixelFormat
+
+import neuromorphic_drivers as nd
+import event_stream as es
 
 dirname = pathlib.Path(__file__).resolve().parent
 
@@ -25,11 +30,20 @@ dirname = pathlib.Path(__file__).resolve().parent
 @dataclasses.dataclass
 class Output:
     path: pathlib.Path
-    pixel_format: transform.PixelFormat
+    pixel_format: PixelFormat
     width: int
     height: int
     exposure: float
     gain: float
+
+@dataclasses.dataclass
+class EventOutput:
+    path: pathlib.Path
+    width: int
+    height: int
+    diff_on: int
+    diff_off: int
+    diff: int
 
 
 def size_to_string(size: int) -> str:
@@ -96,7 +110,6 @@ class CircularBuffer:
         self.data[self.write_index] = (timestamp, width, height, data)
         self.write_index = (self.write_index + 1) % len(self.data)
         self.packets = min(self.packets + 1, len(self.data))
-
 
 class Recorder:
     def __init__(self, configuration: PySide6.QtQml.QQmlPropertyMap):
@@ -174,10 +187,10 @@ class Recorder:
                         queue_recorded_bytes = 26
                     last_update = time.monotonic_ns()
                     self.configuration.insert(
-                        "recording_bytes", f"{queue_recorded_bytes} B"
+                        "basler_recording_bytes", f"{queue_recorded_bytes} B"
                     )
-                    self.configuration.insert("recording_frames", queue_recorded_frames)
-                    self.configuration.insert("recording_duration", "00:00:00.000")
+                    self.configuration.insert("basler_recording_frames", queue_recorded_frames)
+                    self.configuration.insert("basler_recording_duration", "00:00:00.000")
                 try:
                     timestamp, width, height, data = self.queue.popleft()
                     buffered_frames = len(self.queue)
@@ -191,7 +204,7 @@ class Recorder:
                         if now - last_update > 10000000:  # 10 ms
                             last_update = now
                             self.configuration.insert(
-                                "buffered_frames", buffered_frames_string
+                                "basler_buffered_frames", buffered_frames_string
                             )
                     else:
                         if queue_recorded_first_timestamp is None:
@@ -210,16 +223,16 @@ class Recorder:
                         if now - last_update > 10000000:  # 10 ms
                             last_update = now
                             self.configuration.insert(
-                                "buffered_frames", buffered_frames_string
+                                "basler_buffered_frames", buffered_frames_string
                             )
                             self.configuration.insert(
-                                "recording_bytes", size_to_string(queue_recorded_bytes)
+                                "basler_recording_bytes", size_to_string(queue_recorded_bytes)
                             )
                             self.configuration.insert(
-                                "recording_frames", queue_recorded_frames
+                                "basler_recording_frames", queue_recorded_frames
                             )
                             self.configuration.insert(
-                                "recording_duration",
+                                "basler_recording_duration",
                                 milliseconds_to_string(
                                     int(
                                         round(
@@ -234,7 +247,7 @@ class Recorder:
                     now = time.monotonic_ns()
                     if now - last_update > 10000000:  # 10 ms
                         last_update = now
-                        self.configuration.insert("buffered_frames", "< 10 frames")
+                        self.configuration.insert("basler_buffered_frames", "< 10 frames")
                     time.sleep(0.005)
             else:  # circular buffer
                 if new_output is None:
@@ -249,7 +262,7 @@ class Recorder:
                                 self.active_circular_buffer
                             ].packets
                         self.configuration.insert(
-                            "circular_buffer_usage",
+                            "basler_circular_buffer_usage",
                             f"{circular_buffer_packets} / {circular_buffer_length}",
                         )
                     time.sleep(0.005)
@@ -299,15 +312,15 @@ class Recorder:
                                 if now - last_update > 10000000:  # 10 ms
                                     last_update = now
                                     self.configuration.insert(
-                                        "recording_bytes",
+                                        "basler_recording_bytes",
                                         size_to_string(circular_buffer_bytes),
                                     )
                                     self.configuration.insert(
-                                        "recording_frames",
+                                        "basler_recording_frames",
                                         circular_buffer_first_timestamp,
                                     )
                                     self.configuration.insert(
-                                        "recording_duration",
+                                        "basler_recording_duration",
                                         milliseconds_to_string(
                                             int(
                                                 round(
@@ -326,12 +339,12 @@ class Recorder:
                             )
                             if index == write_index:
                                 break
-                    self.configuration.insert("recording_bytes", "0 B")
-                    self.configuration.insert("recording_frames", 0)
-                    self.configuration.insert("recording_duration", "00:00:00.000")
-                    self.configuration.insert("recording_name", None)
+                    self.configuration.insert("basler_recording_bytes", "0 B")
+                    self.configuration.insert("basler_recording_frames", 0)
+                    self.configuration.insert("basler_recording_duration", "00:00:00.000")
+                    self.configuration.insert("basler_recording_name", None)
                     self.configuration.insert(
-                        "circular_buffer_usage",
+                        "basler_circular_buffer_usage",
                         f"0 / {circular_buffer_length}",
                     )
                     self.output = None
@@ -363,7 +376,7 @@ class Recorder:
     def start(
         self,
         path: pathlib.Path,
-        pixel_format: transform.PixelFormat,
+        pixel_format: PixelFormat,
         width: int,
         height: int,
         exposure: float,
@@ -390,11 +403,10 @@ class Recorder:
                     timestamp, width, height, data
                 )
 
-
 class ImageProvider(PySide6.QtQuick.QQuickImageProvider):
     def __init__(
         self,
-        pixel_format: transform.PixelFormat,
+        pixel_format: PixelFormat,
         default_width: int,
         default_height: int,
         configuration: PySide6.QtQml.QQmlPropertyMap,
@@ -411,13 +423,13 @@ class ImageProvider(PySide6.QtQuick.QQuickImageProvider):
         self.request_height = 0
         self.request_array_index = 0
         self.request_array: bytearray = bytearray([])
-        self.request_timestamps = numpy.zeros(32, dtype=numpy.uint64)
+        self.request_timestamps = np.zeros(32, dtype=np.uint64)
 
         self.latest_width = 0
         self.latest_height = 0
         self.latest_array: bytearray = bytearray([])
         self.latest_array_index = 0
-        self.latest_timestamps = numpy.zeros(32, dtype=numpy.uint64)
+        self.latest_timestamps = np.zeros(32, dtype=np.uint64)
         self.latest_timestamps_index = 0
 
         self.unpacker = transform.Unpacker()
@@ -458,11 +470,11 @@ class ImageProvider(PySide6.QtQuick.QQuickImageProvider):
         self.request_timestamps.sort()
         nonzero_timestamps = self.request_timestamps[self.request_timestamps > 0]
         if len(nonzero_timestamps) > 1:
-            mean_timestamp_delta = numpy.mean(
-                numpy.diff(self.request_timestamps[self.request_timestamps > 0])
+            mean_timestamp_delta = np.mean(
+                np.diff(self.request_timestamps[self.request_timestamps > 0])
             )
             framerate = float(1e9 / mean_timestamp_delta)
-            self.configuration.insert("measured_framerate", framerate)
+            self.configuration.insert("basler_measured_framerate", framerate)
 
         if len(self.request_array) == 0:
             size.setWidth(self.default_width)
@@ -476,7 +488,7 @@ class ImageProvider(PySide6.QtQuick.QQuickImageProvider):
             width=self.request_width,
             height=self.request_height,
             data=self.request_array,
-            pixel_format=pixel_format,
+            pixel_format=typing.cast(PixelFormat, self.pixel_format),
         )
         size.setWidth(self.request_width)
         size.setHeight(self.request_height)
@@ -500,6 +512,346 @@ class ImageProvider(PySide6.QtQuick.QQuickImageProvider):
         return image
 
 
+class EventImageProvider(PySide6.QtQuick.QQuickImageProvider):
+    def __init__(
+        self,
+        default_width: int,
+        default_height: int,
+        configuration: PySide6.QtQml.QQmlPropertyMap,
+    ):
+        super().__init__(PySide6.QtQml.QQmlImageProviderBase.ImageType.Image)
+        self.default_width = default_width
+        self.default_height = default_height
+        self.configuration = configuration
+
+        self.lock = threading.Lock()
+
+        self.request_width = 0
+        self.request_height = 0
+        self.request_array_index = 0
+        self.request_array: bytearray = bytearray([])
+        self.request_timestamps = np.zeros(32, dtype=np.uint64)
+
+        self.latest_width = 0
+        self.latest_height = 0
+        self.latest_array: bytearray = bytearray([])
+        self.latest_array_index = 0
+        self.latest_timestamps = np.zeros(32, dtype=np.uint64)
+        self.latest_timestamps_index = 0
+
+    def update_array(self, timestamp: int, width: int, height: int, data: bytearray):
+        with self.lock:
+            self.latest_timestamps[self.latest_timestamps_index] = timestamp
+            self.latest_timestamps_index = (self.latest_timestamps_index + 1) % len(
+                self.latest_timestamps
+            )
+            self.latest_width = width
+            self.latest_height = height
+            self.latest_array = data
+            self.latest_array_index += 1
+
+    def requestImage(
+        self,
+        id: str,
+        size: PySide6.QtCore.QSize,
+        requestedSize: PySide6.QtCore.QSize,
+    ) -> PySide6.QtGui.QImage:
+        with self.lock:
+            self.request_width = self.latest_width
+            self.request_height = self.latest_height
+            self.request_array = self.latest_array
+            self.request_array_index = self.latest_array_index
+            self.request_timestamps[:] = self.latest_timestamps
+
+        self.request_timestamps.sort()
+        nonzero_timestamps = self.request_timestamps[self.request_timestamps > 0]
+        if len(nonzero_timestamps) > 1:
+            mean_timestamp_delta = np.mean(
+                np.diff(self.request_timestamps[self.request_timestamps > 0])
+            )
+
+        if len(self.request_array) == 0:
+            size.setWidth(self.default_width)
+            size.setHeight(self.default_height)
+            return PySide6.QtGui.QImage(
+                self.default_width,
+                self.default_height,
+                PySide6.QtGui.QImage.Format.Format_Grayscale16,
+            )
+        
+        # For event camera, the data is already processed as a grayscale image
+        size.setWidth(self.request_width)
+        size.setHeight(self.request_height)
+        
+        image = PySide6.QtGui.QImage(
+            self.request_array,
+            self.request_width,
+            self.request_height,
+            PySide6.QtGui.QImage.Format.Format_Grayscale16,
+        )
+        return image
+
+class EventRecorder:
+    def __init__(self, configuration: PySide6.QtQml.QQmlPropertyMap):
+        self.configuration = configuration
+        self.queue: collections.deque[tuple[int ,np.ndarray]] = (
+            collections.deque()
+        )
+
+        self.buffer_length = 1
+        self.buffer_duration = 0
+        self.prevTime = datetime.datetime.now()
+
+        self.EventOutput: typing.Optional[EventOutput] = None
+        self.running = True
+        self.thread = threading.Thread(target=self.target, daemon=True)
+        self.thread.start()
+
+    def setBufferLength(self, bufferLength):
+        self.buffer_length = bufferLength
+
+    def setBufferDuration(self, bufferDuration):
+        self.buffer_duration = bufferDuration
+
+    def target(self):
+        queue_output = None
+        queue_output_file: typing.Optional[typing.IO[bytes]] = None
+        queue_recorded_bytes = 0
+        queue_recorded_events = 0
+        queue_recorded_first_timestamp = None
+        last_update = 0
+        i = 0
+        while self.running:
+            new_output = self.EventOutput
+            if new_output != queue_output:
+                if queue_output_file is not None:
+                    buffered_frames = len(self.queue)
+                    for _ in range(0, buffered_frames):
+                        try:
+                            timestamp, data = self.queue.popleft()
+                            #############################################
+                            # TODO Write data out not necessary right now
+                            # Write Data HERE
+                            # queue_output_file.write(data)
+                            #############################################
+                        except IndexError:
+                            break
+                    queue_output_file.close()
+                    queue_output_file = None
+                    queue_recorded_bytes = 0
+                    queue_recorded_frames = 0
+                    queue_recorded_first_timestamp = None
+                queue_output = new_output
+                if queue_output is not None:
+                    queue_output_file = open(queue_output.path, "wb")
+                    queue_recorded_bytes = 0
+                last_update = time.monotonic_ns()
+                self.configuration.insert(
+                    "event_recording_bytes", f"{queue_recorded_bytes} B"
+                )
+                self.configuration.insert("event_recording_event_rate", "Placeholder")
+                self.configuration.insert("event_recording_duration", "00:00:00.000")
+            else:
+                time.sleep(0.005)
+                
+            try:
+                if queue_output is not None:
+                    timestamp, data = self.queue.popleft()
+                
+                buffered_events = len(self.queue)
+
+                if queue_output is None:
+                    now = time.monotonic_ns()
+                    if now - last_update > 10000000:  # 10 ms
+                        last_update = now
+                        self.configuration.insert(
+                            "event_buffered_events", buffered_events
+                        )
+                        self.configuration.insert(
+                            "event_maximum_buffer_size", self.buffer_length
+                        )
+                else:
+                    if queue_recorded_first_timestamp is None:
+                        queue_recorded_first_timestamp = timestamp
+                    #############################################
+                    # TODO Write data out not necessary right now
+                    # Write Data HERE
+                    # queue_output_file.write(data)
+                    #############################################
+                    queue_recorded_bytes += len(data.tobytes())
+                    queue_recorded_events += len(data)
+                    now = time.monotonic_ns()
+                    if now - last_update > 10000000:  # 10 ms
+                        last_update = now
+                        self.configuration.insert(
+                            "event_buffered_events", buffered_events
+                        )
+                        self.configuration.insert(
+                            "event_maximum_buffer_size", self.buffer_length
+                        )
+                        self.configuration.insert(
+                            "event_recording_bytes", size_to_string(queue_recorded_bytes)
+                        )
+                        self.configuration.insert(
+                            "event_recording_events", queue_recorded_events
+                        )
+                        self.configuration.insert(
+                            "event_recording_duration",
+                            milliseconds_to_string(
+                                int(
+                                    round(
+                                        timestamp / 1e6
+                                        - queue_recorded_first_timestamp / 1e6
+                                    )
+                                )
+                            ),
+                        )
+            except IndexError:
+                now = time.monotonic_ns()
+                if now - last_update > 10000000:  # 10 ms
+                    last_update = now
+                    self.configuration.insert(
+                        "event_buffered_events", 0
+                    )
+                    self.configuration.insert(
+                        "event_maximum_buffer_size", self.buffer_length
+                    )
+                time.sleep(0.005)
+
+
+    def __enter__(self) -> "EventRecorder":
+        return self
+
+    def __exit__(
+        self,
+        exception_type: typing.Optional[typing.Type[BaseException]],
+        value: typing.Optional[BaseException],
+        traceback: typing.Optional[types.TracebackType],
+    ) -> bool:
+        self.running = False
+        self.thread.join()
+        return False
+
+    def start(
+        self,
+        path: pathlib.Path,
+        width: int,
+        height: int,
+        diff_on: int,
+        diff_off: int,
+        diff:int
+    ):
+        self.EventOutput = EventOutput(
+            path=path,
+            width=width,
+            height=height,
+            diff_on=diff_on,
+            diff_off=diff_off,
+            diff=diff
+        )
+
+    def stop(self):
+        self.EventOutput = None
+
+    def push(self, data: tuple[int, np.ndarray]):
+        self.queue.append(data)
+        queueSize = len(self.queue)
+        while queueSize >= self.buffer_length:
+            _ = self.queue.popleft()
+
+        now = int(time.time() * 1e9)
+        
+        while True:
+            oldTimestamp, array = self.queue.popleft()
+            if now - oldTimestamp <= self.buffer_duration:
+                self.queue.appendleft((oldTimestamp, array))
+                break
+        
+
+# Event generator thread
+class eventCameraHandler(threading.Thread):
+    def __init__(
+        self,
+        serial:str,
+        event_configuration:nd.prophesee_evk4.Configuration,
+        configuration: PySide6.QtQml.QQmlPropertyMap,
+        event_image_provider: EventImageProvider,
+        recorder: EventRecorder,
+        width: int,
+        height: int,
+    ):
+        super().__init__(daemon=True)
+        self.event_configuration = event_configuration
+        self.configuration = configuration
+        self.serial = serial
+        self.event_image_provider = event_image_provider
+        self.width = width
+        self.height = height
+        self.event_frame = np.zeros((height, width), dtype=np.uint16)
+        self.frame_lock = threading.Lock()
+        self.last_update = 0
+        self.last_frame_update = 0
+        self.recorder = recorder
+
+    def setConfiguration(
+        self,
+        configuration:nd.prophesee_evk4.Configuration
+        ):
+        self.event_configuration = configuration
+        # TODO UPDATE config when this value is changed
+
+    def run(self):
+        with nd.open(configuration=self.event_configuration) as device:
+            print(f"[INFO] Successfully started EVK4 at serial: {self.serial}", flush=True)
+            # Save the camera biases (metadata)
+            metadata = {
+                "system_time": time.time(),
+                "properties": dataclasses.asdict(device.properties()),
+                "configuration": str(self.event_configuration),
+            }
+            #self.metadata_json = json.dumps(metadata, indent=4)
+            eventcount = 0
+            start_time = time.monotonic_ns()
+            for status, packet in device:
+                if packet:
+                    if packet.polarity_events is not None:
+                        if packet.polarity_events.size != 0:
+                            timestamp = int(time.time() * 1e9)
+                        
+                            
+                            eventcount += packet.polarity_events.size
+                            now = time.monotonic_ns()
+                            if now - self.last_update > 100000000:  # 100 ms
+                                eventSeconds = (now - self.last_update)/1000000000
+                                eventrate = eventcount/eventSeconds
+                                self.last_update = now
+                                eventcount = 0
+                                self.configuration.insert(
+                                    "event_measured_eventrate", eventrate
+                                )
+
+                            self.recorder.push((timestamp, packet.polarity_events))
+                            
+                            with self.frame_lock:
+                                self.event_frame[
+                                    packet.polarity_events["y"],
+                                    packet.polarity_events["x"],
+                                ] = packet.polarity_events["on"]*65535
+                                
+                                # Update image provider periodically
+                                now = time.monotonic_ns()
+                                if now - self.last_frame_update > 16666666:#16666666:  # ~60 FPS #33333333: # 30FPS
+                                    self.last_frame_update = now
+                                    
+                                    # Convert to bytes with proper byte order for QImage
+                                    frame_data = bytearray(self.event_frame.astype(np.uint16).tobytes())
+                                    self.event_image_provider.update_array(timestamp, self.width, self.height, frame_data)
+                                    self.event_frame = np.zeros(
+                                        (self.height, self.width),
+                                        dtype=np.uint16,
+                                    )+32767
+
+
 class ImageEventHandler(pylon.ImageEventHandler):
     def __init__(
         self,
@@ -517,13 +869,15 @@ class ImageEventHandler(pylon.ImageEventHandler):
         grabResult: pylon.GrabResult,
     ):
         if grabResult.GrabSucceeded():
-            configuration.insert("queued_buffers", int(camera.NumQueuedBuffers.Value))
+            configuration.insert("basler_queued_buffers", int(camera.NumQueuedBuffers.Value))
             timestamp = grabResult.GetTimeStamp()
             width = grabResult.GetWidth()
             height = grabResult.GetHeight()
             data = grabResult.GetImageBuffer()
             self.recorder.push(timestamp, width, height, data)
             self.image_provider.update_array(timestamp, width, height, data)
+
+
 
 
 SUFFIX_AND_MULTIPLIER: list[tuple["str", float]] = [
@@ -544,29 +898,30 @@ FRAMERATE_KEYS: set[str] = {
 def parse_duration(duration: str) -> float:
     for suffix, multiplier in SUFFIX_AND_MULTIPLIER:
         if duration.endswith(suffix):
-            return float(duration[: -len(suffix)])
+            return float(duration[: -len(suffix)])*multiplier
     raise Exception(f"parsing {duration=} failed (found no matching suffix)")
 
 
 if __name__ == "__main__":
     configuration = PySide6.QtQml.QQmlPropertyMap()
-    configuration.insert("recording_name", None)
-    configuration.insert("recording_bytes", "0 B")
-    configuration.insert("recording_frames", 0)
-    configuration.insert("recording_duration", "00:00:00.000")
-    configuration.insert("queued_buffers", 0)
-    configuration.insert("maximum_queued_buffers", 0)
-    configuration.insert("buffered_frames", "0 frames")
-    configuration.insert("mode", 0)
-    configuration.insert("circular_buffer_duration", "1 s")
+    configuration.insert("basler_recording_name", None)
+    configuration.insert("basler_recording_bytes", "0 B")
+    configuration.insert("basler_recording_frames", 0)
+    configuration.insert("basler_recording_duration", "00:00:00.000")
+    configuration.insert("basler_queued_buffers", 0)
+    configuration.insert("basler_maximum_queued_buffers", 0)
+    configuration.insert("basler_buffered_frames", "0 frames")
+    configuration.insert("basler_mode", 0)
+    configuration.insert("basler_circular_buffer_duration", "1 s")
 
     camera = pylon.InstantCamera(pylon.TlFactory.GetInstance().CreateFirstDevice())
     camera.Open()
     available_pixel_formats = camera.PixelFormat.GetSymbolics()
+    camera_pixel_format: PixelFormat
     if "BayerRG12p" in available_pixel_formats:
-        pixel_format: transform.PixelFormat = "BayerRG12p"
-    elif "Mono10p":
-        pixel_format: transform.PixelFormat = "Mono10p"
+        camera_pixel_format = "BayerRG12p"
+    elif "Mono10p" in available_pixel_formats:
+        camera_pixel_format = "Mono10p"
     else:
         raise Exception(
             f"the camera's pixel format is not supported by this recorder (the supported formats are BayerRG12p and Mono10p but the camera only supports {available_pixel_formats})"
@@ -579,40 +934,108 @@ if __name__ == "__main__":
     engine = PySide6.QtQml.QQmlApplicationEngine()
     engine.quit.connect(application.quit)
     image_provider = ImageProvider(
-        pixel_format=pixel_format,
+        pixel_format=camera_pixel_format,
         default_width=camera.Width.Max,
         default_height=camera.Height.Max,
         configuration=configuration,
     )
+
+    try:
+        with nd.open() as device:
+            event_cam_width = int(device.properties().width)
+            event_cam_height = int(device.properties().height)
+    except Exception as e:
+        print(f"[WARNING] Event camera not available: {e}")
+        print("Using default event camera dimensions...")
+        event_cam_width = 1280
+        event_cam_height = 720
+
+    event_image_provider = EventImageProvider(
+        default_width=event_cam_width,
+        default_height=event_cam_height,
+        configuration=configuration,
+    )
+    
     engine.rootContext().setContextProperty("monospace_font", monospace_font)
     engine.rootContext().setContextProperty("configuration", configuration)
     engine.addImageProvider("camera", image_provider)
+    engine.addImageProvider("eventcamera", event_image_provider)
     engine.setInitialProperties(
         {
-            "maximum_width": camera.Width.Max,
-            "width_increment": camera.Width.Inc,
-            "maximum_height": camera.Height.Max,
-            "height_increment": camera.Height.Inc,
-            "maximum_framerate": camera.AcquisitionFrameRate.Max * 10,
-            "minimum_exposure": camera.ExposureTime.Min,
-            "maximum_exposure": camera.ExposureTime.Max,
-            "minimum_gain": camera.Gain.Min * 100,
-            "maximum_gain": camera.Gain.Max * 100,
+            "basler_maximum_width": camera.Width.Max,
+            "basler_width_increment": camera.Width.Inc,
+            "basler_maximum_height": camera.Height.Max,
+            "basler_height_increment": camera.Height.Inc,
+            "basler_maximum_framerate": camera.AcquisitionFrameRate.Max * 10,
+            "basler_minimum_exposure": camera.ExposureTime.Min,
+            "basler_maximum_exposure": camera.ExposureTime.Max,
+            "basler_minimum_gain": camera.Gain.Min * 100,
+            "basler_maximum_gain": camera.Gain.Max * 100,
+            "event_maximum_diff_on": 255,
+            "event_minimum_diff_on": 0,
+            "event_diff_on_increment": 1,
+            "event_maximum_diff_off": 255,
+            "event_minimum_diff_off": 0,
+            "event_diff_off_increment": 1,
+            "event_maximum_diff": 255,
+            "event_minimum_diff": 0,
+            "event_diff_increment": 1,
         }
     )
-    configuration.insert("width", camera.Width.Max)
-    configuration.insert("height", camera.Height.Max)
-    configuration.insert("x_offset", 0)
-    configuration.insert("y_offset", 0)
+    configuration.insert("basler_width", camera.Width.Max)
+    configuration.insert("basler_height", camera.Height.Max)
+    configuration.insert("basler_x_offset", 0)
+    configuration.insert("basler_y_offset", 0)
+    
+    # Initialize event camera configuration values
+    configuration.insert("event_diff_on", 140)
+    configuration.insert("event_diff_off", 80)
+    configuration.insert("event_diff", 100)
+    configuration.insert("event_buffer_duration", 200)
+    configuration.insert("event_buffer_size", 4000)
+    configuration.insert("event_measured_eventrate", 0.0)
+    configuration.insert("event_buffered_events", 0)
+    configuration.insert("event_maximum_buffer_size", 4000)
     engine.load("record.qml")
     recordings = dirname / "recordings"
     recordings.mkdir(exist_ok=True)
     application_globals = {
         "code": 0,
-        "mode": 0,
+        "basler_mode": 0,
         "circular_buffer_duration_s": 5.0,
     }
-    with Recorder(configuration=configuration) as recorder:
+    with Recorder(configuration=configuration) as recorder, EventRecorder(configuration=configuration) as eventRecorder:
+
+        buffer_duration = configuration.value("event_buffer_duration") if configuration.contains("event_buffer_duration") else 200
+        buffer_size = configuration.value("event_buffer_size") if configuration.contains("event_buffer_size") else 4000
+        eventRecorder.setBufferDuration(buffer_duration * 1000000)  # Convert ms to nanoseconds
+        eventRecorder.setBufferLength(buffer_size)
+
+        # Default
+        evkConfiguration = nd.prophesee_evk4.Configuration(
+            biases=nd.prophesee_evk4.Biases(
+                diff_off=80,  # default: 102
+                diff_on=140,  # default: 73
+            )
+        )
+        
+        try:
+            event_handler = eventCameraHandler(
+                serial="",  # Use default device
+                configuration=configuration,
+                event_configuration=evkConfiguration,
+                event_image_provider=event_image_provider,
+                width=event_cam_width,
+                height=event_cam_height,
+                recorder=eventRecorder
+            )
+            event_handler.start()
+            print(f"[INFO] Event camera handler started successfully")
+        except Exception as e:
+            print(f"[WARNING] Failed to start event camera handler: {e}")
+            print("Continuing with Basler camera only...")
+            event_handler = None
+
         camera.RegisterImageEventHandler(
             ImageEventHandler(
                 recorder=recorder,
@@ -630,20 +1053,20 @@ if __name__ == "__main__":
         camera.Height.Value = camera.Height.Max
         camera.ExposureAuto.Value = "Off"
         camera.GainAuto.Value = "Off"
-        if pixel_format == "BayerRG12p":
+        if camera_pixel_format == "BayerRG12p":
             camera.BalanceWhiteAuto.Value = "Off"
-        camera.PixelFormat.Value = pixel_format
+        camera.PixelFormat.Value = camera_pixel_format
         camera.ExposureTime.Value = 3000.0  # µs
         camera.Gain.Value = 0.0
         camera.AcquisitionFrameRateEnable.Value = True
         camera.AcquisitionFrameRate.Value = 1000
-        configuration.insert("calculated_framerate", camera.ResultingFrameRate.Value)
+        configuration.insert("basler_calculated_framerate", camera.ResultingFrameRate.Value)
         configuration.insert(
-            "maximum_queued_buffers", int(camera.MaxNumQueuedBuffer.Value)
+            "basler_maximum_queued_buffers", int(camera.MaxNumQueuedBuffer.Value)
         )
 
         def on_configuration_update(key: str, value: typing.Any):
-            if key == "width":
+            if key == "basler_width":
                 if int(value) % camera.Width.Inc == 0:
                     camera.StopGrabbing()
                     if camera.Width.Value > int(value):
@@ -679,7 +1102,7 @@ if __name__ == "__main__":
                     print(f"Warning: Width must be a multiple of {camera.Width.Inc}")
                     configuration.insert("width", camera.Width.Value)
                     configuration.insert("x_offset", camera.OffsetX.Value)
-            elif key == "height":
+            elif key == "basler_height":
                 if int(value) % camera.Height.Inc == 0:
                     camera.StopGrabbing()
                     if camera.Height.Value > int(value):
@@ -715,7 +1138,7 @@ if __name__ == "__main__":
                     print(f"Warning: Height must be a multiple of {camera.Height.Inc}")
                     configuration.insert("height", camera.Height.Value)
                     configuration.insert("y_offset", camera.OffsetY.Value)
-            elif key == "x_offset":
+            elif key == "basler_x_offset":
                 if int(value) % camera.Width.Inc == 0:
                     new_width = camera.Width.Value + int(value)
                     if new_width <= camera.Width.Max:
@@ -731,7 +1154,7 @@ if __name__ == "__main__":
                     print(f"Warning: X offset must be a multiple of {camera.Width.Inc}")
                     configuration.insert("width", camera.Width.Value)
                     configuration.insert("x_offset", camera.OffsetX.Value)
-            elif key == "y_offset":
+            elif key == "basler_y_offset":
                 if int(value) % camera.Height.Inc == 0:
                     new_height = camera.Height.Value + int(value)
                     if new_height <= camera.Height.Max:
@@ -749,16 +1172,42 @@ if __name__ == "__main__":
                     )
                     configuration.insert("height", camera.Height.Value)
                     configuration.insert("y_offset", camera.OffsetY.Value)
-            elif key == "framerate":
+            elif key == "basler_framerate":
                 camera.AcquisitionFrameRate.Value = float(value) / 10.0
-            elif key == "exposure":
+            elif key == "basler_exposure":
                 camera.ExposureTime.Value = float(value)
-            elif key == "gain":
+            elif key == "basler_gain":
                 camera.Gain.Value = float(value) / 100.0
-            elif key == "calculated_framerate":
+            elif key == "basler_calculated_framerate":
                 pass
-            elif key == "measured_framerate":
+            elif key == "basler_measured_framerate":
                 pass
+            elif key == "event_diff_on":
+                # Update the event camera configuration
+                if event_handler is not None:
+                    evkConfiguration.biases.diff_on = int(value)
+                    event_handler.setConfiguration(evkConfiguration)
+            elif key == "event_diff_off":
+                # Update the event camera configuration
+                if event_handler is not None:
+                    evkConfiguration.biases.diff_off = int(value)
+                    event_handler.setConfiguration(evkConfiguration)
+            elif key == "event_diff":
+                # Update the event camera configuration
+                if event_handler is not None:
+                    # Note: diff parameter might need to be handled differently depending on the API
+                    # For now, we'll store it but may need to map it to the appropriate bias parameter
+                    pass
+            elif key == "event_measured_eventrate":
+                pass
+            elif key == "event_buffer_duration":
+                # Update the event recorder buffer duration
+                if eventRecorder is not None:
+                    eventRecorder.setBufferDuration(int(value) * 1000000)  # Convert ms to nanoseconds
+            elif key == "event_buffer_size":
+                # Update the event recorder buffer size
+                if eventRecorder is not None:
+                    eventRecorder.setBufferLength(int(value))
             elif key == "start_recording":
                 exposure = camera.ExposureTime.Value
                 gain = camera.Gain.Value
@@ -769,20 +1218,41 @@ if __name__ == "__main__":
                     .replace(":", "-")
                     + ".basler"
                 )
+                event_recording_name = (
+                    datetime.datetime.now(tz=datetime.timezone.utc)
+                    .isoformat()
+                    .replace("+00:00", "Z")
+                    .replace(":", "-")
+                    + ".es"
+                )
                 recorder.start(
                     path=recordings / recording_name,
-                    pixel_format=pixel_format,
+                    pixel_format=camera_pixel_format,
                     width=camera.Width.Value,
                     height=camera.Height.Value,
                     exposure=exposure,
                     gain=gain,
                 )
-                configuration.insert("recording_name", recording_name)
+                diff_on = configuration.value("event_diff_on") if configuration.contains("event_diff_on") else 140
+                diff_off = configuration.value("event_diff_off") if configuration.contains("event_diff_off") else 80
+                diff = configuration.value("event_diff") if configuration.contains("event_diff") else 100
+                eventRecorder.start(
+                    path=recordings / event_recording_name,
+                    width=event_cam_width,
+                    height=event_cam_height,
+                    diff_on=diff_on,
+                    diff_off=diff_off,
+                    diff=diff
+                )
+                configuration.insert("basler_recording_name", recording_name)
+                #configuration.insert("event_recording_name", event_recording_name)
             elif key == "stop_recording":
                 recorder.stop()
-                configuration.insert("recording_name", None)
-            elif key == "mode":
-                application_globals["mode"] = value
+                eventRecorder.stop()
+                configuration.insert("basler_recording_name", None)
+                configuration.insert("event_recording_name", None)
+            elif key == "basler_mode":
+                application_globals["basler_mode"] = value
                 if value == 0:
                     recorder.direct_mode()
                 elif value == 1:
@@ -793,12 +1263,12 @@ if __name__ == "__main__":
                         )
                     )
                 else:
-                    raise Exception(f'unexpected {value=} for key "mode"')
-            elif key == "circular_buffer_duration":
+                    raise Exception(f'unexpected {value=} for key "basler_mode"')
+            elif key == "basler_circular_buffer_duration":
                 application_globals["circular_buffer_duration_s"] = parse_duration(
                     value
                 )
-                if application_globals["mode"] == 1:
+                if application_globals["basler_mode"] == 1:
                     recorder.circular_buffer(
                         length=round(
                             application_globals["circular_buffer_duration_s"]
@@ -808,11 +1278,11 @@ if __name__ == "__main__":
             else:
                 print(f"unknown {key=} with value {value}")
             configuration.insert(
-                "calculated_framerate", camera.ResultingFrameRate.Value
+                "basler_calculated_framerate", camera.ResultingFrameRate.Value
             )
 
             if key in FRAMERATE_KEYS:
-                if application_globals["mode"] == 1:
+                if application_globals["basler_mode"] == 1:
                     recorder.circular_buffer(
                         length=round(
                             application_globals["circular_buffer_duration_s"]

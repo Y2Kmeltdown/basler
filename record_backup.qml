@@ -9,25 +9,15 @@ ApplicationWindow {
     height: 720
     title: "Basler"
 
-    property var basler_maximum_width
-    property var basler_width_increment
-    property var basler_maximum_height
-    property var basler_height_increment
-    property var basler_maximum_framerate
-    property var basler_minimum_exposure
-    property var basler_maximum_exposure
-    property var basler_minimum_gain
-    property var basler_maximum_gain
-
-    property var event_diff_increment
-    property var event_diff_off_increment
-    property var event_diff_on_increment
-    property var event_maximum_diff
-    property var event_minimum_diff
-    property var event_maximum_diff_on
-    property var event_minimum_diff_on
-    property var event_maximum_diff_off
-    property var event_minimum_diff_off
+    property var maximum_width
+    property var width_increment
+    property var maximum_height
+    property var height_increment
+    property var maximum_framerate
+    property var minimum_exposure
+    property var maximum_exposure
+    property var minimum_gain
+    property var maximum_gain
 
     Timer {
         property var trigger_index: 0
@@ -37,7 +27,6 @@ ApplicationWindow {
         onTriggered: {
             ++trigger_index
             image_display.source = `image://camera/${trigger_index}`
-            event_image_display.source = `image://eventcamera/${trigger_index}`
         }
     }
 
@@ -53,48 +42,11 @@ ApplicationWindow {
             Layout.fillWidth: true
             color: "#090909"
 
-            Text {
-                id: basler_label
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.margins: 10
-                text: "Basler Camera"
-                color: "#FFFFFF"
-                font: monospace_font
-                z: 1
-            }
-
             Image {
                 id: image_display
                 anchors.fill: image_display_container
                 fillMode: Image.PreserveAspectFit
                 source: `image://camera/0`
-            }
-        }
-
-        Rectangle {
-            id: event_image_display_container
-            Layout.alignment: Qt.AlignCenter
-            Layout.fillHeight: true
-            Layout.fillWidth: true
-            color: "#090909"
-
-            Text {
-                id: event_label
-                anchors.top: parent.top
-                anchors.left: parent.left
-                anchors.margins: 10
-                text: "Event Camera"
-                color: "#FFFFFF"
-                font: monospace_font
-                z: 1
-            }
-
-            Image {
-                id: event_image_display
-                anchors.fill: event_image_display_container
-                fillMode: Image.PreserveAspectFit
-                source: `image://eventcamera/0`
             }
         }
 
@@ -118,16 +70,6 @@ ApplicationWindow {
                 ColumnLayout {
                     width: menu.width - 40
 
-                    Text {
-                        Layout.topMargin: 10
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                        text: "Basler Camera Settings"
-                        color: "#FFFFFF"
-                        font.family: monospace_font.family
-                        font.pixelSize: monospace_font.pixelSize
-                        font.bold: true
-                    }
-
                     RowLayout {
                         Layout.topMargin: 5
                         Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
@@ -148,16 +90,16 @@ ApplicationWindow {
                             palette.mid: "#494949"
                             palette.highlight: "#1E88E5"
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: basler_width_increment
-                            to: basler_maximum_width
-                            value: configuration && configuration.basler_width ? configuration.basler_width : 0
-                            stepSize: basler_width_increment
+                            from: width_increment
+                            to: maximum_width
+                            value: configuration && configuration.width ? configuration.width : 0
+                            stepSize: width_increment
                             editable: true
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             font: monospace_font
 
                             onValueModified: {
-                                configuration.basler_width = value;
+                                configuration.width = value;
                             }
                         }
                     }
@@ -180,16 +122,16 @@ ApplicationWindow {
                             palette.mid: "#494949"
                             palette.highlight: "#1E88E5"
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: basler_height_increment
-                            to: basler_maximum_height
-                            value: configuration && configuration.basler_height ? configuration.basler_height : 0
-                            stepSize: basler_height_increment
+                            from: height_increment
+                            to: maximum_height
+                            value: configuration && configuration.height ? configuration.height : 0
+                            stepSize: height_increment
                             editable: true
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             font: monospace_font
 
                             onValueModified: {
-                                configuration.basler_height = value;
+                                configuration.height = value;
                             }
                         }
                     }
@@ -215,15 +157,15 @@ ApplicationWindow {
                             palette.highlight: "#1E88E5"
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
                             from: 0
-                            to: basler_maximum_width
-                            value: configuration && configuration.basler_x_offset ? configuration.basler_x_offset : 0
-                            stepSize: basler_width_increment
+                            to: maximum_width
+                            value: configuration && configuration.x_offset ? configuration.x_offset : 0
+                            stepSize: width_increment
                             editable: true
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             font: monospace_font
 
                             onValueModified: {
-                                configuration.basler_x_offset = value;
+                                configuration.x_offset = value;
                             }
                         }
                     }
@@ -249,15 +191,15 @@ ApplicationWindow {
                             palette.highlight: "#1E88E5"
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
                             from: 0
-                            to: basler_maximum_height
-                            value: configuration && configuration.basler_y_offset ? configuration.basler_y_offset : 0
-                            stepSize: basler_height_increment
+                            to: maximum_height
+                            value: configuration && configuration.y_offset ? configuration.y_offset : 0
+                            stepSize: height_increment
                             editable: true
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             font: monospace_font
 
                             onValueModified: {
-                                configuration.basler_y_offset = value;
+                                configuration.y_offset = value;
                             }
                         }
                     }
@@ -282,11 +224,11 @@ ApplicationWindow {
                             palette.highlight: "#1E88E5"
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
                             from: 1
-                            to: basler_maximum_framerate
+                            to: maximum_framerate
                             stepSize: 1
                             value: 10000
                             editable: true
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             font: monospace_font
 
                             validator: DoubleValidator {
@@ -305,7 +247,7 @@ ApplicationWindow {
                             }
 
                             onValueModified: {
-                                configuration.basler_framerate = value;
+                                configuration.framerate = value;
                             }
                         }
                     }
@@ -328,16 +270,16 @@ ApplicationWindow {
                             palette.mid: "#494949"
                             palette.highlight: "#1E88E5"
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: basler_minimum_exposure
-                            to: basler_maximum_exposure
+                            from: minimum_exposure
+                            to: maximum_exposure
                             value: 3000
                             stepSize: 1
                             editable: true
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             font: monospace_font
 
                             onValueModified: {
-                                configuration.basler_exposure = value;
+                                configuration.exposure = value;
                             }
                         }
                     }
@@ -361,12 +303,12 @@ ApplicationWindow {
                             palette.mid: "#494949"
                             palette.highlight: "#1E88E5"
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: basler_minimum_gain
-                            to: basler_maximum_gain
+                            from: minimum_gain
+                            to: maximum_gain
                             stepSize: 1
                             value: 0
                             editable: true
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             font: monospace_font
 
                             validator: DoubleValidator {
@@ -385,7 +327,7 @@ ApplicationWindow {
                             }
 
                             onValueModified: {
-                                configuration.basler_gain = value;
+                                configuration.gain = value;
                             }
                         }
                     }
@@ -402,7 +344,7 @@ ApplicationWindow {
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration && configuration.basler_calculated_framerate ? configuration.basler_calculated_framerate.toFixed(1) : "-"
+                            text: configuration && configuration.calculated_framerate ? configuration.calculated_framerate.toFixed(1) : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
@@ -420,7 +362,7 @@ ApplicationWindow {
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration && configuration.basler_measured_framerate ? configuration.basler_measured_framerate.toFixed(1) : "-"
+                            text: configuration && configuration.measured_framerate ? configuration.measured_framerate.toFixed(1) : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
@@ -438,7 +380,7 @@ ApplicationWindow {
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration ? `${configuration.basler_queued_buffers} / ${configuration.basler_maximum_queued_buffers}` : "-"
+                            text: configuration ? `${configuration.queued_buffers} / ${configuration.maximum_queued_buffers}` : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
@@ -451,15 +393,15 @@ ApplicationWindow {
 
                         ComboBox {
                             model: ["Direct mode", "Circular buffer"]
-                            enabled: configuration?.basler_recording_name == null
+                            enabled: configuration?.recording_name == null
                             onCurrentIndexChanged: {
-                                configuration.basler_mode = currentIndex;
+                                configuration.mode = currentIndex;
                             }
                         }
                     }
 
                     RowLayout {
-                        visible: configuration?.basler_mode == 0
+                        visible: configuration?.mode == 0
                         Layout.topMargin: 5
                         Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
                         spacing: 20
@@ -471,14 +413,14 @@ ApplicationWindow {
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration ? configuration.basler_buffered_frames : "-"
+                            text: configuration ? configuration.buffered_frames : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
                     }
 
                     ColumnLayout {
-                        visible: configuration?.basler_mode == 1
+                        visible: configuration?.mode == 1
                         Layout.topMargin: 5
                         Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
                         spacing: 5
@@ -496,16 +438,16 @@ ApplicationWindow {
                             ComboBox {
                                 model: ["100 ms", "200 ms", "500 ms", "1 s", "2 s", "5 s", "10 s", "20 s"]
                                 currentIndex: 5
-                                enabled: configuration?.basler_recording_name == null
+                                enabled: configuration?.recording_name == null
                                 onCurrentIndexChanged: {
-                                    configuration.basler_circular_buffer_duration = model[currentIndex];
+                                    configuration.circular_buffer_duration = model[currentIndex];
                                 }
                             }
                         }
                     }
 
                     RowLayout {
-                        visible: configuration?.basler_mode == 1
+                        visible: configuration?.mode == 1
                         Layout.topMargin: 5
                         Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
                         spacing: 20
@@ -517,203 +459,7 @@ ApplicationWindow {
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration && configuration.basler_circular_buffer_usage ? configuration.basler_circular_buffer_usage : "-"
-                            color: "#FFFFFF"
-                            font: monospace_font
-                        }
-                    }
-
-                    // Event Camera Controls Section
-                    Rectangle {
-                        Layout.topMargin: 20
-                        Layout.fillWidth: true
-                        height: 1
-                        color: "#494949"
-                    }
-
-                    Text {
-                        Layout.topMargin: 10
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                        text: "Event Camera Settings"
-                        color: "#FFFFFF"
-                        font.family: monospace_font.family
-                        font.pixelSize: monospace_font.pixelSize
-                        font.bold: true
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            text: "Diff On"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        SpinBox {
-                            palette.button: "#393939"
-                            palette.buttonText: "#FFFFFF"
-                            palette.text: "#FFFFFF"
-                            palette.base: "#191919"
-                            palette.mid: "#494949"
-                            palette.highlight: "#1E88E5"
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: event_minimum_diff_on
-                            to: event_maximum_diff_on
-                            value: configuration && configuration.event_diff_on ? configuration.event_diff_on : 140
-                            stepSize: event_diff_on_increment
-                            editable: true
-                            enabled: configuration?.basler_recording_name == null
-                            font: monospace_font
-
-                            onValueModified: {
-                                configuration.event_diff_on = value;
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            text: "Diff Off"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        SpinBox {
-                            palette.button: "#393939"
-                            palette.buttonText: "#FFFFFF"
-                            palette.text: "#FFFFFF"
-                            palette.base: "#191919"
-                            palette.mid: "#494949"
-                            palette.highlight: "#1E88E5"
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: event_minimum_diff_off
-                            to: event_maximum_diff_off
-                            value: configuration && configuration.event_diff_off ? configuration.event_diff_off : 80
-                            stepSize: event_diff_off_increment
-                            editable: true
-                            enabled: configuration?.event_recording_name == null
-                            font: monospace_font
-
-                            onValueModified: {
-                                configuration.event_diff_off = value;
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            text: "Diff"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        SpinBox {
-                            palette.button: "#393939"
-                            palette.buttonText: "#FFFFFF"
-                            palette.text: "#FFFFFF"
-                            palette.base: "#191919"
-                            palette.mid: "#494949"
-                            palette.highlight: "#1E88E5"
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: event_minimum_diff
-                            to: event_maximum_diff
-                            value: configuration && configuration.event_diff ? configuration.event_diff : 100
-                            stepSize: event_diff_increment
-                            editable: true
-                            enabled: configuration?.event_recording_name == null
-                            font: monospace_font
-
-                            onValueModified: {
-                                configuration.event_diff = value;
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            text: "Buffer Duration (ms)"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        SpinBox {
-                            palette.button: "#393939"
-                            palette.buttonText: "#FFFFFF"
-                            palette.text: "#FFFFFF"
-                            palette.base: "#191919"
-                            palette.mid: "#494949"
-                            palette.highlight: "#1E88E5"
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: 10
-                            to: 10000
-                            value: configuration && configuration.event_buffer_duration ? configuration.event_buffer_duration : 200
-                            stepSize: 10
-                            editable: true
-                            enabled: configuration?.event_recording_name == null
-                            font: monospace_font
-
-                            onValueModified: {
-                                configuration.event_buffer_duration = value;
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            text: "Buffer Size"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        SpinBox {
-                            palette.button: "#393939"
-                            palette.buttonText: "#FFFFFF"
-                            palette.text: "#FFFFFF"
-                            palette.base: "#191919"
-                            palette.mid: "#494949"
-                            palette.highlight: "#1E88E5"
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: 100
-                            to: 100000
-                            value: configuration && configuration.event_buffer_size ? configuration.event_buffer_size : 4000
-                            stepSize: 100
-                            editable: true
-                            enabled: configuration?.event_recording_name == null
-                            font: monospace_font
-
-                            onValueModified: {
-                                configuration.event_buffer_size = value;
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: "Event Rate"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration && configuration.event_measured_eventrate ? configuration.event_measured_eventrate.toFixed(1) : "-"
+                            text: configuration && configuration.circular_buffer_usage ? configuration.circular_buffer_usage : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
@@ -721,56 +467,13 @@ ApplicationWindow {
 
                     RowLayout {
                         Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: "Buffer Usage"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration && configuration.event_buffered_events !== undefined && configuration.event_maximum_buffer_size !== undefined ? 
-                                `${configuration.event_buffered_events} / ${configuration.event_maximum_buffer_size}` : "0 / 0"
-                            color: "#FFFFFF"
-                            font: monospace_font
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: "Buffer %"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: {
-                                if (configuration && configuration.event_buffered_events !== undefined && configuration.event_maximum_buffer_size !== undefined && configuration.event_maximum_buffer_size > 0) {
-                                    var percentage = (configuration.event_buffered_events / configuration.event_maximum_buffer_size * 100).toFixed(1)
-                                    return percentage + "%"
-                                }
-                                return "0.0%"
-                            }
-                            color: "#FFFFFF"
-                            font: monospace_font
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
-                        Layout.alignment: configuration?.basler_recording_name == null ? Qt.AlignVCenter | Qt.AlignLeft : Qt.AlignVCenter | Qt.AlignRight
+                        Layout.alignment: configuration?.recording_name == null ? Qt.AlignVCenter | Qt.AlignLeft : Qt.AlignVCenter | Qt.AlignRight
                         spacing: 20
 
                         Button {
                             property var click_index: 0
                             text: "Start recording"
-                            visible: configuration?.basler_recording_name == null
+                            visible: configuration?.recording_name == null
                             onClicked: {
                                 ++click_index
                                 configuration.start_recording = click_index
@@ -780,7 +483,7 @@ ApplicationWindow {
                         Button {
                             property var click_index: 0
                             text: "Stop recording"
-                            visible: configuration?.basler_recording_name != null && configuration?.basler_mode == 0
+                            visible: configuration?.recording_name != null && configuration?.mode == 0
                             onClicked: {
                                 ++click_index
                                 configuration.stop_recording = click_index
@@ -789,7 +492,7 @@ ApplicationWindow {
                     }
 
                     ColumnLayout {
-                        visible: configuration?.basler_recording_name != null
+                        visible: configuration?.recording_name != null
                         Layout.topMargin: 5
                         Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
                         spacing: 5
@@ -802,25 +505,25 @@ ApplicationWindow {
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration && configuration.basler_recording_name ? configuration.basler_recording_name : "-"
+                            text: configuration && configuration.recording_name ? configuration.recording_name : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration ? configuration.basler_recording_duration : "-"
+                            text: configuration ? configuration.recording_duration : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration ? `${configuration.basler_recording_frames} frames` : "-"
+                            text: configuration ? `${configuration.recording_frames} frames` : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
                         Text {
                             Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
-                            text: configuration ? configuration.basler_recording_bytes : "-"
+                            text: configuration ? configuration.recording_bytes : "-"
                             color: "#FFFFFF"
                             font: monospace_font
                         }
