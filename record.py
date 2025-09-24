@@ -593,12 +593,15 @@ class EventImageProvider(PySide6.QtQuick.QQuickImageProvider):
 
 class EventRecorder:
     def __init__(self, configuration: PySide6.QtQml.QQmlPropertyMap):
+
+        self.mode = 0
+
         self.configuration = configuration
         self.queue: collections.deque[tuple[int ,np.ndarray]] = (
             collections.deque()
         )
 
-        self.buffer_length = 1
+        self.buffer_length = 0
         self.buffer_duration = 0
         self.prevTime = datetime.datetime.now()
 
@@ -606,6 +609,16 @@ class EventRecorder:
         self.running = True
         self.thread = threading.Thread(target=self.target, daemon=True)
         self.thread.start()
+
+    def setContinuousRecordingMode(self):
+        self.mode = 0
+
+    def setFixedLengthRecordingMode(self, recordingTime):
+        self.mode = 1
+        self.recordingTime = recordingTime
+
+    def setRecordingLength(self, recordingTime):
+        self.recordingTime = recordingTime
 
     def setBufferLength(self, bufferLength):
         self.buffer_length = bufferLength
@@ -620,20 +633,19 @@ class EventRecorder:
         queue_recorded_events = 0
         queue_recorded_first_timestamp = None
         last_update = 0
-        i = 0
         while self.running:
             new_output = self.EventOutput
             if new_output != queue_output:
+                recordingStart = time.monotonic_ns()
                 if queue_output_file is not None:
                     buffered_frames = len(self.queue)
                     for _ in range(0, buffered_frames):
                         try:
                             timestamp, data = self.queue.popleft()
-                            #############################################
-                            # TODO Write data out not necessary right now
-                            # Write Data HERE
-                            # queue_output_file.write(data)
-                            #############################################
+                            #queue_output_file.write(data)
+                            queue_output_file.write(data.tobytes()) # NEEDS to be read and decoded back to numpy arrays using event_dtype = [('t', '<u8'), ('x', '<u2'), ('y', '<u2'), ('on', '?')]
+                            
+                            
                         except IndexError:
                             break
                     queue_output_file.close()
@@ -644,6 +656,7 @@ class EventRecorder:
                 queue_output = new_output
                 if queue_output is not None:
                     queue_output_file = open(queue_output.path, "wb")
+                    #queue_output_file = es.Encoder(queue_output.path, 'dvs', 1280, 720)
                     queue_recorded_bytes = 0
                 last_update = time.monotonic_ns()
                 self.configuration.insert(
@@ -652,11 +665,15 @@ class EventRecorder:
                 self.configuration.insert("event_recording_event_rate", "Placeholder")
                 self.configuration.insert("event_recording_duration", "00:00:00.000")
             else:
-                time.sleep(0.005)
+                time.sleep(0.001)
                 
             try:
                 if queue_output is not None:
                     timestamp, data = self.queue.popleft()
+                    if self.mode == 1:
+                        if queue_recorded_first_timestamp is not None:
+                            if timestamp - queue_recorded_first_timestamp >= self.recordingTime:
+                                self.EventOutput = None
                 
                 buffered_events = len(self.queue)
 
@@ -673,11 +690,10 @@ class EventRecorder:
                 else:
                     if queue_recorded_first_timestamp is None:
                         queue_recorded_first_timestamp = timestamp
-                    #############################################
-                    # TODO Write data out not necessary right now
-                    # Write Data HERE
-                    # queue_output_file.write(data)
-                    #############################################
+
+                    if queue_output_file is not None:
+                        queue_output_file.write(data)
+                    
                     queue_recorded_bytes += len(data.tobytes())
                     queue_recorded_events += len(data)
                     now = time.monotonic_ns()
@@ -756,17 +772,10 @@ class EventRecorder:
     def push(self, data: tuple[int, np.ndarray]):
         self.queue.append(data)
         queueSize = len(self.queue)
-        while queueSize >= self.buffer_length:
+        while queueSize > int(self.buffer_length):
             _ = self.queue.popleft()
+            queueSize = len(self.queue)
 
-        now = int(time.time() * 1e9)
-        
-        while True:
-            oldTimestamp, array = self.queue.popleft()
-            if now - oldTimestamp <= self.buffer_duration:
-                self.queue.appendleft((oldTimestamp, array))
-                break
-        
 
 # Event generator thread
 class eventCameraHandler(threading.Thread):
@@ -782,6 +791,7 @@ class eventCameraHandler(threading.Thread):
     ):
         super().__init__(daemon=True)
         self.event_configuration = event_configuration
+        self.event_config_changed = False
         self.configuration = configuration
         self.serial = serial
         self.event_image_provider = event_image_provider
@@ -798,7 +808,7 @@ class eventCameraHandler(threading.Thread):
         configuration:nd.prophesee_evk4.Configuration
         ):
         self.event_configuration = configuration
-        # TODO UPDATE config when this value is changed
+        self.event_config_changed = True
 
     def run(self):
         with nd.open(configuration=self.event_configuration) as device:
@@ -809,14 +819,15 @@ class eventCameraHandler(threading.Thread):
                 "properties": dataclasses.asdict(device.properties()),
                 "configuration": str(self.event_configuration),
             }
-            #self.metadata_json = json.dumps(metadata, indent=4)
             eventcount = 0
-            start_time = time.monotonic_ns()
             for status, packet in device:
+                if self.event_config_changed:
+                    device.update_configuration(self.event_configuration)
+                    self.event_config_changed = False
                 if packet:
                     if packet.polarity_events is not None:
                         if packet.polarity_events.size != 0:
-                            timestamp = int(time.time() * 1e9)
+                            timestamp = time.monotonic_ns()
                         
                             
                             eventcount += packet.polarity_events.size
@@ -833,10 +844,21 @@ class eventCameraHandler(threading.Thread):
                             self.recorder.push((timestamp, packet.polarity_events))
                             
                             with self.frame_lock:
+                                #TODO Rate limit packet.polarity_events by trimming the numpy array randomly only specifically for display
+                                rateLimit = 500000
+                                packetSize = packet.polarity_events.shape[0]
+                                if packetSize > rateLimit:
+                                    excess = packetSize - rateLimit
+                                    #indices_to_remove = np.random.choice(packetSize, excess, replace=False)
+                                    #frame_events = np.delete(packet.polarity_events, indices_to_remove, axis=0)
+                                    frame_events = packet.polarity_events[:-excess]
+                                else:
+                                    frame_events = packet.polarity_events
+                                
                                 self.event_frame[
-                                    packet.polarity_events["y"],
-                                    packet.polarity_events["x"],
-                                ] = packet.polarity_events["on"]*65535
+                                    frame_events["y"],
+                                    frame_events["x"],
+                                ] = frame_events["on"]*65535
                                 
                                 # Update image provider periodically
                                 now = time.monotonic_ns()
@@ -940,15 +962,8 @@ if __name__ == "__main__":
         configuration=configuration,
     )
 
-    try:
-        with nd.open() as device:
-            event_cam_width = int(device.properties().width)
-            event_cam_height = int(device.properties().height)
-    except Exception as e:
-        print(f"[WARNING] Event camera not available: {e}")
-        print("Using default event camera dimensions...")
-        event_cam_width = 1280
-        event_cam_height = 720
+    event_cam_width = 1280
+    event_cam_height = 720
 
     event_image_provider = EventImageProvider(
         default_width=event_cam_width,
@@ -991,11 +1006,10 @@ if __name__ == "__main__":
     configuration.insert("event_diff_on", 140)
     configuration.insert("event_diff_off", 80)
     configuration.insert("event_diff", 100)
-    configuration.insert("event_buffer_duration", 200)
-    configuration.insert("event_buffer_size", 4000)
+    configuration.insert("event_buffer_duration", 5000)
     configuration.insert("event_measured_eventrate", 0.0)
     configuration.insert("event_buffered_events", 0)
-    configuration.insert("event_maximum_buffer_size", 4000)
+    configuration.insert("event_maximum_buffer_size", 1250)
     engine.load("record.qml")
     recordings = dirname / "recordings"
     recordings.mkdir(exist_ok=True)
@@ -1006,8 +1020,8 @@ if __name__ == "__main__":
     }
     with Recorder(configuration=configuration) as recorder, EventRecorder(configuration=configuration) as eventRecorder:
 
-        buffer_duration = configuration.value("event_buffer_duration") if configuration.contains("event_buffer_duration") else 200
-        buffer_size = configuration.value("event_buffer_size") if configuration.contains("event_buffer_size") else 4000
+        buffer_duration = configuration.value("event_buffer_duration") if configuration.contains("event_buffer_duration") else 5000
+        buffer_size = configuration.value("event_buffer_size") if configuration.contains("event_buffer_size") else 1250
         eventRecorder.setBufferDuration(buffer_duration * 1000000)  # Convert ms to nanoseconds
         eventRecorder.setBufferLength(buffer_size)
 
@@ -1016,6 +1030,7 @@ if __name__ == "__main__":
             biases=nd.prophesee_evk4.Biases(
                 diff_off=80,  # default: 102
                 diff_on=140,  # default: 73
+                diff=77
             )
         )
         
@@ -1195,19 +1210,16 @@ if __name__ == "__main__":
             elif key == "event_diff":
                 # Update the event camera configuration
                 if event_handler is not None:
-                    # Note: diff parameter might need to be handled differently depending on the API
-                    # For now, we'll store it but may need to map it to the appropriate bias parameter
-                    pass
+                    evkConfiguration.biases.diff = int(value)
+                    event_handler.setConfiguration(evkConfiguration)
             elif key == "event_measured_eventrate":
                 pass
             elif key == "event_buffer_duration":
                 # Update the event recorder buffer duration
                 if eventRecorder is not None:
                     eventRecorder.setBufferDuration(int(value) * 1000000)  # Convert ms to nanoseconds
-            elif key == "event_buffer_size":
-                # Update the event recorder buffer size
                 if eventRecorder is not None:
-                    eventRecorder.setBufferLength(int(value))
+                    eventRecorder.setBufferLength(int(value/4))
             elif key == "start_recording":
                 exposure = camera.ExposureTime.Value
                 gain = camera.Gain.Value
@@ -1223,7 +1235,7 @@ if __name__ == "__main__":
                     .isoformat()
                     .replace("+00:00", "Z")
                     .replace(":", "-")
-                    + ".es"
+                    + ".npyBytes"
                 )
                 recorder.start(
                     path=recordings / recording_name,
@@ -1255,6 +1267,7 @@ if __name__ == "__main__":
                 application_globals["basler_mode"] = value
                 if value == 0:
                     recorder.direct_mode()
+                    eventRecorder.setContinuousRecordingMode()
                 elif value == 1:
                     recorder.circular_buffer(
                         length=round(
@@ -1262,6 +1275,8 @@ if __name__ == "__main__":
                             * camera.ResultingFrameRate.Value
                         )
                     )
+                    eventRecorder.setFixedLengthRecordingMode(int(application_globals["circular_buffer_duration_s"] * 1000000000))
+
                 else:
                     raise Exception(f'unexpected {value=} for key "basler_mode"')
             elif key == "basler_circular_buffer_duration":
@@ -1275,6 +1290,7 @@ if __name__ == "__main__":
                             * camera.ResultingFrameRate.Value
                         )
                     )
+                    eventRecorder.setRecordingLength(int(application_globals["circular_buffer_duration_s"] * 1000000000))
             else:
                 print(f"unknown {key=} with value {value}")
             configuration.insert(

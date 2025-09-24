@@ -671,38 +671,6 @@ ApplicationWindow {
 
                     RowLayout {
                         Layout.topMargin: 5
-                        Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                        spacing: 20
-                        Text {
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            text: "Buffer Size"
-                            color: "#CCCCCC"
-                            font: monospace_font
-                        }
-                        SpinBox {
-                            palette.button: "#393939"
-                            palette.buttonText: "#FFFFFF"
-                            palette.text: "#FFFFFF"
-                            palette.base: "#191919"
-                            palette.mid: "#494949"
-                            palette.highlight: "#1E88E5"
-                            Layout.alignment: Qt.AlignVCenter | Qt.AlignRight
-                            from: 100
-                            to: 100000
-                            value: configuration && configuration.event_buffer_size ? configuration.event_buffer_size : 4000
-                            stepSize: 100
-                            editable: true
-                            enabled: configuration?.event_recording_name == null
-                            font: monospace_font
-
-                            onValueModified: {
-                                configuration.event_buffer_size = value;
-                            }
-                        }
-                    }
-
-                    RowLayout {
-                        Layout.topMargin: 5
                         Layout.alignment: Qt.AlignVCenter | Qt.AlignLeft
                         spacing: 20
                         Text {
