@@ -24,6 +24,7 @@ from transform import PixelFormat
 import neuromorphic_drivers as nd
 import event_stream as es
 
+
 dirname = pathlib.Path(__file__).resolve().parent
 
 
@@ -403,6 +404,191 @@ class Recorder:
                     timestamp, width, height, data
                 )
 
+class EventRecorder:
+    def __init__(self, configuration: PySide6.QtQml.QQmlPropertyMap):
+
+        self.mode = 0
+
+        self.configuration = configuration
+        self.queue: collections.deque[tuple[int ,np.ndarray]] = (
+            collections.deque()
+        )
+
+        self.buffer_length = 0
+        self.buffer_duration = 0
+        self.prevTime = datetime.datetime.now()
+
+        self.EventOutput: typing.Optional[EventOutput] = None
+        self.running = True
+        self.thread = threading.Thread(target=self.target, daemon=True)
+        self.thread.start()
+
+    def setContinuousRecordingMode(self):
+        self.mode = 0
+
+    def setFixedLengthRecordingMode(self, recordingTime):
+        self.mode = 1
+        self.recordingTime = recordingTime
+
+    def setRecordingLength(self, recordingTime):
+        self.recordingTime = recordingTime
+
+    def setBufferLength(self, bufferLength):
+        self.buffer_length = bufferLength
+
+    def setBufferDuration(self, bufferDuration):
+        self.buffer_duration = bufferDuration
+
+    def target(self):
+        queue_output = None
+        queue_output_file: typing.Optional[typing.IO[bytes]] = None
+        queue_recorded_bytes = 0
+        queue_recorded_events = 0
+        queue_recorded_first_timestamp = None
+        last_update = 0
+        while self.running:
+            new_output = self.EventOutput
+            if new_output != queue_output:
+                recordingStart = time.monotonic_ns()
+                if queue_output_file is not None:
+                    buffered_frames = len(self.queue)
+                    for _ in range(0, buffered_frames):
+                        try:
+                            timestamp, data = self.queue.popleft()
+                            #queue_output_file.write(data)
+                            queue_output_file.write(data.tobytes()) # NEEDS to be read and decoded back to numpy arrays using event_dtype = [('t', '<u8'), ('x', '<u2'), ('y', '<u2'), ('on', '?')]
+                            
+                            
+                        except IndexError:
+                            break
+                    queue_output_file.close()
+                    queue_output_file = None
+                    queue_recorded_bytes = 0
+                    queue_recorded_frames = 0
+                    queue_recorded_first_timestamp = None
+                queue_output = new_output
+                if queue_output is not None:
+                    queue_output_file = open(queue_output.path, "wb")
+                    #queue_output_file = es.Encoder(queue_output.path, 'dvs', 1280, 720)
+                    queue_recorded_bytes = 0
+                last_update = time.monotonic_ns()
+                self.configuration.insert(
+                    "event_recording_bytes", f"{queue_recorded_bytes} B"
+                )
+                self.configuration.insert("event_recording_event_rate", "Placeholder")
+                self.configuration.insert("event_recording_duration", "00:00:00.000")
+            else:
+                time.sleep(0.001)
+                
+            try:
+                if queue_output is not None:
+                    timestamp, data = self.queue.popleft()
+                    if self.mode == 1:
+                        if queue_recorded_first_timestamp is not None:
+                            if timestamp - queue_recorded_first_timestamp >= self.recordingTime:
+                                self.EventOutput = None
+                
+                buffered_events = len(self.queue)
+
+                if queue_output is None:
+                    now = time.monotonic_ns()
+                    if now - last_update > 10000000:  # 10 ms
+                        last_update = now
+                        self.configuration.insert(
+                            "event_buffered_events", buffered_events
+                        )
+                        self.configuration.insert(
+                            "event_maximum_buffer_size", self.buffer_length
+                        )
+                else:
+                    if queue_recorded_first_timestamp is None:
+                        queue_recorded_first_timestamp = timestamp
+
+                    if queue_output_file is not None:
+                        queue_output_file.write(data)
+                    
+                    queue_recorded_bytes += len(data.tobytes())
+                    queue_recorded_events += len(data)
+                    now = time.monotonic_ns()
+                    if now - last_update > 10000000:  # 10 ms
+                        last_update = now
+                        self.configuration.insert(
+                            "event_buffered_events", buffered_events
+                        )
+                        self.configuration.insert(
+                            "event_maximum_buffer_size", self.buffer_length
+                        )
+                        self.configuration.insert(
+                            "event_recording_bytes", size_to_string(queue_recorded_bytes)
+                        )
+                        self.configuration.insert(
+                            "event_recording_events", queue_recorded_events
+                        )
+                        self.configuration.insert(
+                            "event_recording_duration",
+                            milliseconds_to_string(
+                                int(
+                                    round(
+                                        timestamp / 1e6
+                                        - queue_recorded_first_timestamp / 1e6
+                                    )
+                                )
+                            ),
+                        )
+            except IndexError:
+                now = time.monotonic_ns()
+                if now - last_update > 10000000:  # 10 ms
+                    last_update = now
+                    self.configuration.insert(
+                        "event_buffered_events", 0
+                    )
+                    self.configuration.insert(
+                        "event_maximum_buffer_size", self.buffer_length
+                    )
+                time.sleep(0.005)
+
+
+    def __enter__(self) -> "EventRecorder":
+        return self
+
+    def __exit__(
+        self,
+        exception_type: typing.Optional[typing.Type[BaseException]],
+        value: typing.Optional[BaseException],
+        traceback: typing.Optional[types.TracebackType],
+    ) -> bool:
+        self.running = False
+        self.thread.join()
+        return False
+
+    def start(
+        self,
+        path: pathlib.Path,
+        width: int,
+        height: int,
+        diff_on: int,
+        diff_off: int,
+        diff:int
+    ):
+        self.EventOutput = EventOutput(
+            path=path,
+            width=width,
+            height=height,
+            diff_on=diff_on,
+            diff_off=diff_off,
+            diff=diff
+        )
+
+    def stop(self):
+        self.EventOutput = None
+
+    def push(self, data: tuple[int, np.ndarray]):
+        self.queue.append(data)
+        queueSize = len(self.queue)
+        while queueSize > int(self.buffer_length):
+            _ = self.queue.popleft()
+            queueSize = len(self.queue)
+
 class ImageProvider(PySide6.QtQuick.QQuickImageProvider):
     def __init__(
         self,
@@ -591,193 +777,10 @@ class EventImageProvider(PySide6.QtQuick.QQuickImageProvider):
         )
         return image
 
-class EventRecorder:
-    def __init__(self, configuration: PySide6.QtQml.QQmlPropertyMap):
+class mscImageProvider(PySide6.QtQuick.QQuickImageProvider):
+    def __init__(self):
+        pass
 
-        self.mode = 0
-
-        self.configuration = configuration
-        self.queue: collections.deque[tuple[int ,np.ndarray]] = (
-            collections.deque()
-        )
-
-        self.buffer_length = 0
-        self.buffer_duration = 0
-        self.prevTime = datetime.datetime.now()
-
-        self.EventOutput: typing.Optional[EventOutput] = None
-        self.running = True
-        self.thread = threading.Thread(target=self.target, daemon=True)
-        self.thread.start()
-
-    def setContinuousRecordingMode(self):
-        self.mode = 0
-
-    def setFixedLengthRecordingMode(self, recordingTime):
-        self.mode = 1
-        self.recordingTime = recordingTime
-
-    def setRecordingLength(self, recordingTime):
-        self.recordingTime = recordingTime
-
-    def setBufferLength(self, bufferLength):
-        self.buffer_length = bufferLength
-
-    def setBufferDuration(self, bufferDuration):
-        self.buffer_duration = bufferDuration
-
-    def target(self):
-        queue_output = None
-        queue_output_file: typing.Optional[typing.IO[bytes]] = None
-        queue_recorded_bytes = 0
-        queue_recorded_events = 0
-        queue_recorded_first_timestamp = None
-        last_update = 0
-        while self.running:
-            new_output = self.EventOutput
-            if new_output != queue_output:
-                recordingStart = time.monotonic_ns()
-                if queue_output_file is not None:
-                    buffered_frames = len(self.queue)
-                    for _ in range(0, buffered_frames):
-                        try:
-                            timestamp, data = self.queue.popleft()
-                            #queue_output_file.write(data)
-                            queue_output_file.write(data.tobytes()) # NEEDS to be read and decoded back to numpy arrays using event_dtype = [('t', '<u8'), ('x', '<u2'), ('y', '<u2'), ('on', '?')]
-                            
-                            
-                        except IndexError:
-                            break
-                    queue_output_file.close()
-                    queue_output_file = None
-                    queue_recorded_bytes = 0
-                    queue_recorded_frames = 0
-                    queue_recorded_first_timestamp = None
-                queue_output = new_output
-                if queue_output is not None:
-                    queue_output_file = open(queue_output.path, "wb")
-                    #queue_output_file = es.Encoder(queue_output.path, 'dvs', 1280, 720)
-                    queue_recorded_bytes = 0
-                last_update = time.monotonic_ns()
-                self.configuration.insert(
-                    "event_recording_bytes", f"{queue_recorded_bytes} B"
-                )
-                self.configuration.insert("event_recording_event_rate", "Placeholder")
-                self.configuration.insert("event_recording_duration", "00:00:00.000")
-            else:
-                time.sleep(0.001)
-                
-            try:
-                if queue_output is not None:
-                    timestamp, data = self.queue.popleft()
-                    if self.mode == 1:
-                        if queue_recorded_first_timestamp is not None:
-                            if timestamp - queue_recorded_first_timestamp >= self.recordingTime:
-                                self.EventOutput = None
-                
-                buffered_events = len(self.queue)
-
-                if queue_output is None:
-                    now = time.monotonic_ns()
-                    if now - last_update > 10000000:  # 10 ms
-                        last_update = now
-                        self.configuration.insert(
-                            "event_buffered_events", buffered_events
-                        )
-                        self.configuration.insert(
-                            "event_maximum_buffer_size", self.buffer_length
-                        )
-                else:
-                    if queue_recorded_first_timestamp is None:
-                        queue_recorded_first_timestamp = timestamp
-
-                    if queue_output_file is not None:
-                        queue_output_file.write(data)
-                    
-                    queue_recorded_bytes += len(data.tobytes())
-                    queue_recorded_events += len(data)
-                    now = time.monotonic_ns()
-                    if now - last_update > 10000000:  # 10 ms
-                        last_update = now
-                        self.configuration.insert(
-                            "event_buffered_events", buffered_events
-                        )
-                        self.configuration.insert(
-                            "event_maximum_buffer_size", self.buffer_length
-                        )
-                        self.configuration.insert(
-                            "event_recording_bytes", size_to_string(queue_recorded_bytes)
-                        )
-                        self.configuration.insert(
-                            "event_recording_events", queue_recorded_events
-                        )
-                        self.configuration.insert(
-                            "event_recording_duration",
-                            milliseconds_to_string(
-                                int(
-                                    round(
-                                        timestamp / 1e6
-                                        - queue_recorded_first_timestamp / 1e6
-                                    )
-                                )
-                            ),
-                        )
-            except IndexError:
-                now = time.monotonic_ns()
-                if now - last_update > 10000000:  # 10 ms
-                    last_update = now
-                    self.configuration.insert(
-                        "event_buffered_events", 0
-                    )
-                    self.configuration.insert(
-                        "event_maximum_buffer_size", self.buffer_length
-                    )
-                time.sleep(0.005)
-
-
-    def __enter__(self) -> "EventRecorder":
-        return self
-
-    def __exit__(
-        self,
-        exception_type: typing.Optional[typing.Type[BaseException]],
-        value: typing.Optional[BaseException],
-        traceback: typing.Optional[types.TracebackType],
-    ) -> bool:
-        self.running = False
-        self.thread.join()
-        return False
-
-    def start(
-        self,
-        path: pathlib.Path,
-        width: int,
-        height: int,
-        diff_on: int,
-        diff_off: int,
-        diff:int
-    ):
-        self.EventOutput = EventOutput(
-            path=path,
-            width=width,
-            height=height,
-            diff_on=diff_on,
-            diff_off=diff_off,
-            diff=diff
-        )
-
-    def stop(self):
-        self.EventOutput = None
-
-    def push(self, data: tuple[int, np.ndarray]):
-        self.queue.append(data)
-        queueSize = len(self.queue)
-        while queueSize > int(self.buffer_length):
-            _ = self.queue.popleft()
-            queueSize = len(self.queue)
-
-
-# Event generator thread
 class eventCameraHandler(threading.Thread):
     def __init__(
         self,
@@ -873,7 +876,6 @@ class eventCameraHandler(threading.Thread):
                                         dtype=np.uint16,
                                     )+32767
 
-
 class ImageEventHandler(pylon.ImageEventHandler):
     def __init__(
         self,
@@ -898,7 +900,6 @@ class ImageEventHandler(pylon.ImageEventHandler):
             data = grabResult.GetImageBuffer()
             self.recorder.push(timestamp, width, height, data)
             self.image_provider.update_array(timestamp, width, height, data)
-
 
 
 
