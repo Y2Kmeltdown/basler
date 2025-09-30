@@ -4,3 +4,5 @@ recordings
 *.pyc
 __pycache__
 target
+build
+dist

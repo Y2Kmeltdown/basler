@@ -1,0 +1,1 @@
+pyinstaller --clean -y -n "Event_Recorder" --add-data="record.qml;files" --add-data="RobotoMono.ttf;files" --windowed --noconsole record.py

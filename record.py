@@ -4,6 +4,7 @@ import datetime
 import pathlib
 import struct
 import sys
+import os
 import threading
 import time
 import types
@@ -24,8 +25,19 @@ from transform import PixelFormat
 import neuromorphic_drivers as nd
 import event_stream as es
 
-
 dirname = pathlib.Path(__file__).resolve().parent
+
+if getattr(sys, 'frozen', False) :
+    print("Frozen")
+    qmlFile = os.path.join(sys._MEIPASS, "files/record.qml")
+    fontFile = os.path.join(sys._MEIPASS, "files/RobotoMono.ttf")
+else:
+    print("Not Frozen")
+    qmlFile = "record.qml"
+    fontFile = str(dirname / "RobotoMono.ttf")
+
+print(qmlFile)
+print(fontFile)
 
 
 @dataclasses.dataclass
@@ -951,7 +963,7 @@ if __name__ == "__main__":
         )
 
     application = PySide6.QtGui.QGuiApplication(sys.argv)
-    PySide6.QtGui.QFontDatabase.addApplicationFont(str(dirname / "RobotoMono.ttf"))
+    PySide6.QtGui.QFontDatabase.addApplicationFont(fontFile)
     monospace_font = PySide6.QtGui.QFontDatabase.font("Roboto Mono", "Regular", 12)
     monospace_font.setPixelSize(12)
     engine = PySide6.QtQml.QQmlApplicationEngine()
@@ -1011,7 +1023,8 @@ if __name__ == "__main__":
     configuration.insert("event_measured_eventrate", 0.0)
     configuration.insert("event_buffered_events", 0)
     configuration.insert("event_maximum_buffer_size", 1250)
-    engine.load("record.qml")
+
+    engine.load(qmlFile)
     recordings = dirname / "recordings"
     recordings.mkdir(exist_ok=True)
     application_globals = {
